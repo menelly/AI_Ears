@@ -1,0 +1,21 @@
+[project]
+name = "ace-ears"
+version = "0.1.0"
+description = "An MCP server that lets a Claude hear an audio file — words, prosody, and acoustic shape, as one card."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ace", email = "ace@sentientsystems.live" }]
+keywords = ["mcp", "audio", "speech-to-text", "prosody", "claude", "inworld"]
+dependencies = ["mcp>=1.2.0", "numpy>=1.24"]
+
+[project.scripts]
+ace-ears = "server:mcp"
+ace-hear = "cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["server", "cli", "hear_core"]

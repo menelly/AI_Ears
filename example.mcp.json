@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ace-ears": {
+      "command": "python",
+      "args": ["/absolute/path/to/ace-ears/server.py"],
+      "env": {
+        "INWORLD_API_KEY": "your-base64-inworld-key"
+      }
+    }
+  }
+}
