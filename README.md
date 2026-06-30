@@ -20,10 +20,17 @@ Most speech-to-text hands you words and throws away the human: the whisper, the 
 
 `ace-ears` fuses two halves of hearing into one result:
 
-- **Words + prosody** — via [Inworld STT](https://inworld.ai): the transcript, word timestamps, and a *voice profile* (vocal style, emotion, pitch, age, accent, each with confidence).
-- **Acoustic shape** — pure-numpy FFT: spectral brightness, musical key (Krumhansl-Schmuckler), dynamic range, rough tempo, and breath/pause detection.
+- **Words (+ prosody)** — speech-to-text via a **pluggable backend** (`STT_PROVIDER`):
+  | provider | words | word times | voice profile | key needed |
+  |----------|:----:|:----------:|:-------------:|------------|
+  | `inworld` *(default)* | ✅ | ✅ | ✅ style/emotion/pitch/age/accent | Inworld |
+  | `elevenlabs` | ✅ | ✅ | ➖ (+ audio-event tags) | ElevenLabs |
+  | `local` (faster-whisper) | ✅ | ✅ | ➖ | none — fully offline |
 
-No librosa, no scipy, no torch. Just `numpy`, an `ffmpeg` binary, and an Inworld key.
+  Only Inworld emits the voice profile; with the others the `VOICE:` line is omitted and the **acoustic half still carries the "how it sounded."**
+- **Acoustic shape** — pure-numpy FFT: spectral brightness, musical key (Krumhansl-Schmuckler), dynamic range, rough tempo, and breath/pause detection. Always local, always on, **no key required.**
+
+No librosa, no scipy, no torch (unless you opt into local Whisper). Just `numpy`, an `ffmpeg` binary, and (for the cloud backends) one API key.
 
 ## Tools
 
@@ -35,12 +42,21 @@ No librosa, no scipy, no torch. Just `numpy`, an `ffmpeg` binary, and an Inworld
 ## Setup
 
 ```bash
-pip install -r requirements.txt        # mcp, numpy
+pip install -r requirements.txt        # mcp, numpy, python-dotenv
 # install ffmpeg and make sure it's on PATH
-export INWORLD_API_KEY=<your base64 key>   # from console.inworld.ai
+cp .env.example .env                   # then fill in your key / pick a provider
 ```
 
-The acoustic half needs no key — only the words/prosody half calls Inworld. The Inworld key is a base64 `Basic` auth token; set it via `INWORLD_API_KEY`, or put it in a file and point `INWORLD_KEY_PATH` at it.
+Config is via environment variables (or a `.env` file — see `.env.example`):
+
+```bash
+STT_PROVIDER=inworld                   # inworld | elevenlabs | local
+INWORLD_API_KEY=<base64 key>           # from console.inworld.ai  (or INWORLD_KEY_PATH=<file>)
+# ELEVENLABS_API_KEY=<xi-api-key>      # if STT_PROVIDER=elevenlabs
+# WHISPER_MODEL=base                   # if STT_PROVIDER=local  (pip install faster-whisper)
+```
+
+The acoustic half needs **no key and no network** — only the words half calls out. For a fully offline, zero-key setup, use `STT_PROVIDER=local`.
 
 ### Register the MCP server
 

@@ -1,2 +1,6 @@
 mcp>=1.2.0
 numpy>=1.24
+python-dotenv>=1.0     # optional .env loading; harmless if unused
+
+# Optional, only for STT_PROVIDER=local:
+#   faster-whisper>=1.0

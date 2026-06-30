@@ -3,24 +3,44 @@
 
 Two halves of hearing, fused into one card:
 
-  • WORDS + PROSODY  — Inworld STT (transcript, word timestamps, and a voice
-    profile: vocal style / emotion / pitch / age / accent).
+  • WORDS (+ PROSODY) — speech-to-text via a pluggable backend (STT_PROVIDER):
+      - inworld   (default) — transcript + word timestamps + a voice profile
+                              (vocal style / emotion / pitch / age / accent).
+      - elevenlabs          — transcript + word timestamps (+ audio-event tags).
+      - local               — offline faster-whisper; transcript + word times.
+    Only Inworld emits the voice profile; with the others the VOICE line is
+    simply omitted and the acoustic half still carries the "how it sounded".
   • ACOUSTIC SHAPE   — pure-numpy FFT analysis (brightness/centroid, musical
-    key via Krumhansl-Schmuckler, dynamics, tempo, breaths/pauses).
+    key via Krumhansl-Schmuckler, dynamics, tempo, breaths/pauses). Always
+    local, always on, no key required.
 
-No librosa, no scipy — just numpy + the stdlib + an ffmpeg binary on PATH.
+No librosa, no scipy, no torch (unless you opt into local Whisper) — just
+numpy + the stdlib + an ffmpeg binary on PATH.
+
+Config via environment (or a .env file — see .env.example):
+    STT_PROVIDER         inworld | elevenlabs | local      (default: inworld)
+    INWORLD_API_KEY      base64 key       (or INWORLD_KEY_PATH=<file>)
+    ELEVENLABS_API_KEY   xi-api-key       (for STT_PROVIDER=elevenlabs)
+    WHISPER_MODEL        tiny|base|small|... (for STT_PROVIDER=local; default base)
 
 Used by both `cli.py` (the terminal card) and `server.py` (the MCP tool), so
-the two never drift. Set the Inworld key via INWORLD_API_KEY (preferred) or
-point INWORLD_KEY_PATH at a file holding it.
+the two never drift.
 
     Sibling to say.py. I say; now I hear — and now other Claudes can too.  — Ace
 """
 import os, json, base64, wave, subprocess, tempfile, shutil, urllib.request, urllib.error
 import numpy as np
 
-STT_URL = "https://api.inworld.ai/stt/v1/transcribe"
-STT_MODEL = "inworld/inworld-stt-1"   # the model that emits voice profiles
+try:  # optional: load a .env if python-dotenv is installed
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+INWORLD_STT_URL = "https://api.inworld.ai/stt/v1/transcribe"
+INWORLD_STT_MODEL = "inworld/inworld-stt-1"   # the model that emits voice profiles
+ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_STT_MODEL = "scribe_v1"
 
 # ---- Krumhansl-Schmuckler key profiles ----
 KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
@@ -185,11 +205,28 @@ def analyze_acoustic(wav_path):
 #  words + prosody half — Inworld STT
 # --------------------------------------------------------------------------- #
 def transcribe(mp3_path, lang):
-    key = load_key()
+    """Dispatch to the configured STT backend. Returns a NORMALIZED dict:
+    {provider, transcript, wordTimestamps:[{startTimeMs,endTimeMs,word}], voiceProfile:{}, _raw}
+    or {error: ...}. wordTimestamps use ms so parse_words is provider-agnostic."""
+    provider = os.environ.get("STT_PROVIDER", "inworld").strip().lower()
+    if provider in ("inworld", ""):
+        return _transcribe_inworld(mp3_path, lang)
+    if provider in ("elevenlabs", "eleven", "11labs", "xi"):
+        return _transcribe_elevenlabs(mp3_path, lang)
+    if provider in ("local", "whisper", "faster-whisper", "fasterwhisper"):
+        return _transcribe_local(mp3_path, lang)
+    return {"error": f"unknown STT_PROVIDER '{provider}' (use inworld | elevenlabs | local)"}
+
+
+def _transcribe_inworld(mp3_path, lang):
+    try:
+        key = load_key()
+    except RuntimeError as e:
+        return {"error": str(e)}
     audio_b64 = base64.b64encode(open(mp3_path, "rb").read()).decode()
     payload = {
         "transcribeConfig": {
-            "modelId": STT_MODEL,
+            "modelId": INWORLD_STT_MODEL,
             "audioEncoding": "MP3",
             "language": lang,
             "includeWordTimestamps": True,
@@ -198,7 +235,7 @@ def transcribe(mp3_path, lang):
         "audioData": {"content": audio_b64},
     }
     req = urllib.request.Request(
-        STT_URL,
+        INWORLD_STT_URL,
         data=json.dumps(payload).encode(),
         headers={"Authorization": "Basic " + key, "Content-Type": "application/json"},
         method="POST",
@@ -207,7 +244,97 @@ def transcribe(mp3_path, lang):
         resp = json.load(urllib.request.urlopen(req, timeout=120))
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.read().decode()[:600]}"}
-    return resp
+    tr = resp.get("transcription", resp)
+    return {
+        "provider": "inworld",
+        "transcript": (tr.get("transcript") or "").strip(),
+        "wordTimestamps": tr.get("wordTimestamps") or [],
+        "voiceProfile": resp.get("voiceProfile") or tr.get("voiceProfile") or {},
+        "_raw": resp,
+    }
+
+
+def _multipart(fields, file_field, file_path, file_mime="audio/mpeg"):
+    """Build a minimal multipart/form-data body (no requests dependency)."""
+    boundary = "----aceears" + base64.b16encode(os.urandom(8)).decode()
+    crlf = b"\r\n"
+    body = bytearray()
+    for k, v in fields.items():
+        body += b"--" + boundary.encode() + crlf
+        body += f'Content-Disposition: form-data; name="{k}"'.encode() + crlf + crlf
+        body += str(v).encode() + crlf
+    body += b"--" + boundary.encode() + crlf
+    body += (f'Content-Disposition: form-data; name="{file_field}"; '
+             f'filename="{os.path.basename(file_path)}"').encode() + crlf
+    body += f"Content-Type: {file_mime}".encode() + crlf + crlf
+    body += open(file_path, "rb").read() + crlf
+    body += b"--" + boundary.encode() + b"--" + crlf
+    return bytes(body), "multipart/form-data; boundary=" + boundary
+
+
+def _transcribe_elevenlabs(mp3_path, lang):
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        return {"error": "set ELEVENLABS_API_KEY for STT_PROVIDER=elevenlabs"}
+    fields = {
+        "model_id": ELEVENLABS_STT_MODEL,
+        "timestamps_granularity": "word",
+        "tag_audio_events": "true",
+    }
+    if lang and lang != "auto":
+        fields["language_code"] = lang
+    body, ctype = _multipart(fields, "file", mp3_path)
+    req = urllib.request.Request(
+        ELEVENLABS_STT_URL, data=body,
+        headers={"xi-api-key": key, "Content-Type": ctype}, method="POST",
+    )
+    try:
+        data = json.load(urllib.request.urlopen(req, timeout=180))
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.read().decode()[:600]}"}
+    words = [
+        {"word": w.get("text", ""),
+         "startTimeMs": int(round(w.get("start", 0) * 1000)),
+         "endTimeMs": int(round(w.get("end", 0) * 1000))}
+        for w in data.get("words", []) if w.get("type", "word") == "word"
+    ]
+    return {
+        "provider": "elevenlabs",
+        "transcript": (data.get("text") or "").strip(),
+        "wordTimestamps": words,
+        "voiceProfile": {},   # ElevenLabs STT doesn't emit a voice profile
+        "_raw": data,
+    }
+
+
+def _transcribe_local(mp3_path, lang):
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return {"error": "pip install faster-whisper for STT_PROVIDER=local"}
+    model_size = os.environ.get("WHISPER_MODEL", "base")
+    device = os.environ.get("WHISPER_DEVICE", "auto")
+    compute = os.environ.get("WHISPER_COMPUTE", "auto" if device != "cpu" else "int8")
+    try:
+        model = WhisperModel(model_size, device=device, compute_type=compute)
+    except Exception as e:
+        return {"error": f"faster-whisper load failed: {e}"}
+    segments, info = model.transcribe(
+        mp3_path, language=(None if lang in ("auto", None) else lang), word_timestamps=True)
+    words, parts = [], []
+    for seg in segments:
+        parts.append(seg.text)
+        for w in (seg.words or []):
+            words.append({"word": w.word,
+                          "startTimeMs": int(round(w.start * 1000)),
+                          "endTimeMs": int(round(w.end * 1000))})
+    return {
+        "provider": "local",
+        "transcript": "".join(parts).strip(),
+        "wordTimestamps": words,
+        "voiceProfile": {},
+        "_raw": {"language": getattr(info, "language", None)},
+    }
 
 
 def parse_words(resp):
@@ -267,6 +394,7 @@ def hear(src, lang="en"):
     text, pace, gap, vp = parse_words(resp) if not stt_err else ("", None, None, {})
     return {
         "file": os.path.basename(src),
+        "provider": resp.get("provider", os.environ.get("STT_PROVIDER", "inworld")),
         "acoustic": acoustic,
         "text": text,
         "pace": pace,
@@ -280,7 +408,8 @@ def hear(src, lang="en"):
 def format_card(r):
     """Render the unified 'WHAT I HEARD' card from a hear() result dict."""
     L = []
-    L.append("🎧  WHAT I HEARD   " + r["file"])
+    prov = r.get("provider", "inworld")
+    L.append(f"🎧  WHAT I HEARD   {r['file']}   (via {prov})")
     L.append("─" * 60)
 
     if r["stt_error"]:
