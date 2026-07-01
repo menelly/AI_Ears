@@ -58,7 +58,14 @@ def load_key():
         return k.strip()
     path = os.environ.get("INWORLD_KEY_PATH")
     if path and os.path.exists(path):
-        return open(path).read().strip()
+        # Be forgiving about file format: labels, blank lines, KEY=value, etc.
+        # The real key is the longest base64-looking token in the file.
+        import re
+        text = open(path).read()
+        tokens = re.findall(r"[A-Za-z0-9+/=_-]{20,}", text)
+        if tokens:
+            return max(tokens, key=len).strip()
+        return text.strip()
     raise RuntimeError(
         "No Inworld key found. Set INWORLD_API_KEY=<base64 key>, or "
         "INWORLD_KEY_PATH=<file containing it>."
