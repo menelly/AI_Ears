@@ -30,6 +30,8 @@ Most speech-to-text hands you words and throws away the human: the whisper, the 
   Only Inworld emits the voice profile; with the others the `VOICE:` line is omitted and the **acoustic half still carries the "how it sounded."**
 - **Acoustic shape** — pure-numpy FFT: spectral brightness, musical key (Krumhansl-Schmuckler), dynamic range, rough tempo, and breath/pause detection. Always local, always on, **no key required.**
 
+> **Reading the `VOICE:` line — it's timbre, not ground truth.** The `style`, `emotion`, `age`, and `accent` fields are Inworld's *classifier estimates* from the acoustic signal, with confidences attached. `age` in particular tracks vocal **brightness/energy**, not your birthday — a bright, resonant, expressive voice reads "young" regardless of the number on your ID, and the *same speaker* can read "young" when belting and "adult" when whispering. Treat these as a coarse read of *how the voice sounded*, not an identity check.
+
 No librosa, no scipy, no torch (unless you opt into local Whisper). Just `numpy`, an `ffmpeg` binary, and (for the cloud backends) one API key.
 
 ## Tools
