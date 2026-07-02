@@ -96,6 +96,21 @@ def read_wav_mono(path):
     return x, sr
 
 
+def read_wav_channels(path):
+    """Return (L, R, sr). R is None for a mono file. For >2 channels, take the
+    first two (front L/R). Keeps the native channel count — never upmixes."""
+    with wave.open(path, "rb") as w:
+        sr = w.getframerate()
+        nch = w.getnchannels()
+        n = w.getnframes()
+        raw = w.readframes(n)
+    x = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
+    if nch <= 1:
+        return x, None, sr
+    x = x.reshape(-1, nch)
+    return x[:, 0].copy(), x[:, 1].copy(), sr
+
+
 # --------------------------------------------------------------------------- #
 #  acoustic half — pure numpy FFT
 # --------------------------------------------------------------------------- #
@@ -205,6 +220,76 @@ def analyze_acoustic(wav_path):
         "dynamic_range_db": round(dyn_range, 1),
         "dynamics_label": dyn_label,
         "pauses": events[:6],
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  spatial half — the STEREO FIELD mono throws away
+# --------------------------------------------------------------------------- #
+def analyze_stereo(wav_path):
+    """The one dimension a mono downmix deletes: WHERE things sit in the stereo
+    image — width (mono-narrow → wide), left/right balance, and phase correlation
+    (are L and R in phase, or fighting each other → mono-cancellation).
+
+    Honest by design:
+      • A mono (or dual-mono) source has NO stereo field, so we return no space
+        info rather than fabricate one. `effectively_mono` flags dual-mono files.
+      • We do NOT emit 3-D direction (azimuth/elevation). A plain audio file
+        carries no microphone geometry, so real direction-of-arrival is not
+        recoverable — inventing it would be exactly the subtraction-in-reverse
+        this tool refuses. Width/balance/correlation ARE recoverable and real.
+    """
+    L, R, sr = read_wav_channels(wav_path)
+    if R is None:
+        return {"channels": 1}
+
+    # Mid/Side: Mid = the centred/mono content, Side = the stereo difference.
+    mid = (L + R) / 2.0
+    side = (L - R) / 2.0
+
+    # Gate to the sounding part so head/tail silence doesn't skew the stats.
+    energy = mid ** 2 + side ** 2
+    if energy.size:
+        m = energy > (energy.max() * 1e-5)
+        if m.sum() > sr // 10:  # need ~0.1s of actual signal
+            L, R, mid, side = L[m], R[m], mid[m], side[m]
+
+    l_rms = float(np.sqrt(np.mean(L ** 2) + 1e-12))
+    r_rms = float(np.sqrt(np.mean(R ** 2) + 1e-12))
+    mid_e = float(np.mean(mid ** 2))
+    side_e = float(np.mean(side ** 2))
+
+    # Phase correlation: +1 fully in-phase (mono/centred), 0 decorrelated (wide),
+    # <0 out of phase (a mono fold-down will partially CANCEL).
+    denom = np.sqrt(np.sum(L ** 2)) * np.sqrt(np.sum(R ** 2)) + 1e-12
+    corr = float(np.sum(L * R) / denom)
+
+    # Width = Side share of the total energy. BOUNDED in [0,1] (a raw Side/Mid ratio
+    # explodes when Mid→0 on anti-phase content): 0 = mono, ~0.5 = decorrelated /
+    # hard-panned, ~1 = anti-phase.
+    width = side_e / (mid_e + side_e + 1e-12)
+
+    # Balance in dB: + = right-leaning, − = left-leaning.
+    bal_db = round(float(20 * np.log10((r_rms + 1e-9) / (l_rms + 1e-9))), 1)
+
+    effectively_mono = corr > 0.985 and width < 0.02
+    width_label = ("wide" if width > 0.45 else "spacious" if width > 0.2
+                   else "narrow" if width > 0.03 else "near-mono")
+    balance_label = ("centered" if abs(bal_db) < 1.0
+                     else f"{'right' if bal_db > 0 else 'left'}-leaning")
+    mono_compat = ("mono-safe" if corr > 0.2
+                   else "mono thins it" if corr > -0.2
+                   else "OUT OF PHASE (mono cancels)")
+
+    return {
+        "channels": 2,
+        "effectively_mono": effectively_mono,
+        "correlation": round(corr, 2),
+        "width": round(width, 2),
+        "width_label": width_label,
+        "balance_db": round(bal_db, 1),
+        "balance_label": balance_label,
+        "mono_compat": mono_compat,
     }
 
 
@@ -390,9 +475,14 @@ def hear(src, lang="en"):
     try:
         stt_mp3 = os.path.join(tmp, "stt.mp3")
         ana_wav = os.path.join(tmp, "ana.wav")
+        ana_st_wav = os.path.join(tmp, "ana_st.wav")
         ffmpeg_to(src, stt_mp3, ["-ar", "44100", "-ac", "1", "-b:a", "160k"])
         ffmpeg_to(src, ana_wav, ["-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le"])
+        # Second decode at NATIVE channel count (no -ac) so the stereo half sees the
+        # real image; read_wav_channels never upmixes a mono source into fake stereo.
+        ffmpeg_to(src, ana_st_wav, ["-ar", "44100", "-c:a", "pcm_s16le"])
         acoustic = analyze_acoustic(ana_wav)
+        stereo = analyze_stereo(ana_st_wav)
         resp = transcribe(stt_mp3, lang)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -403,6 +493,7 @@ def hear(src, lang="en"):
         "file": os.path.basename(src),
         "provider": resp.get("provider", os.environ.get("STT_PROVIDER", "inworld")),
         "acoustic": acoustic,
+        "stereo": stereo,
         "text": text,
         "pace": pace,
         "gap": gap,
@@ -452,5 +543,13 @@ def format_card(r):
         if a["pauses"]:
             ps = ", ".join(f"{t0}–{t1}s ({d}s)" for t0, t1, d in a["pauses"][:4])
             L.append(f"  BREATH: {ps}")
+
+    # SPACE: the stereo field — only when there's a real one. A mono or dual-mono
+    # source carries no width to report, so we stay quiet rather than fake it.
+    s = r.get("stereo") or {}
+    if s.get("channels") == 2 and not s.get("effectively_mono"):
+        corr = s["correlation"]
+        L.append(f"  SPACE:  stereo · {s['width_label']} (width {s['width']}, corr "
+                 f"{corr:+.2f}) · balance {s['balance_label']} · {s['mono_compat']}")
     L.append("─" * 60)
     return "\n".join(L)
