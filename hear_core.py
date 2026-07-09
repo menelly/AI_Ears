@@ -112,6 +112,72 @@ def read_wav_channels(path):
 
 
 # --------------------------------------------------------------------------- #
+#  musical key — a dedicated, honest estimator
+# --------------------------------------------------------------------------- #
+def _estimate_key(x, sr):
+    """Musical key via a high-resolution, peak-picked chroma + Krumhansl-Schmuckler.
+
+    Deliberately sharper than the coarse per-bin chroma the rest of the card
+    could use:
+      • a big FFT (8192) so semitones actually RESOLVE down low — a 2048 window
+        can't tell A2 from A#2, which mushes the chroma on low voices;
+      • only *spectral peaks* (real partials) vote, so broadband breath / noise
+        on a solo voice can't smear the chroma into a diffuse blob that always
+        squeaks out a win at some default key;
+      • honest gating: a diffuse chroma correlates weakly with ALL 24 templates,
+        so below a confidence floor we return None ('unclear') instead of
+        confidently naming a key we can't actually hear.
+
+    Returns (root, mode, confidence). root/mode are None when it's too diffuse."""
+    x = np.asarray(x, dtype=np.float64)
+    if x.size < 256:
+        return None, None, 0.0
+    win = 8192
+    if x.size < win:
+        win = 1 << int(np.floor(np.log2(x.size)))
+    hop = win // 2
+    window = np.hanning(win)
+    acc = np.zeros(win // 2 + 1)
+    n_frames = max(1, 1 + (x.size - win) // hop)
+    for i in range(n_frames):
+        seg = x[i * hop:i * hop + win]
+        if seg.size < win:
+            s = np.zeros(win); s[:seg.size] = seg; seg = s
+        acc += np.abs(np.fft.rfft(seg * window))
+    freqs = np.fft.rfftfreq(win, 1 / sr)
+    mag = np.log1p(acc / (acc.max() + 1e-12))   # log-compress: tame loud partials
+
+    band = (freqs >= 55) & (freqs <= 2000)      # the band that pitches reliably
+    bf, bm = freqs[band], mag[band]
+    chroma = np.zeros(12)
+    if bm.size > 3:
+        gate = np.percentile(bm, 80)            # only salient local peaks vote
+        idx = np.where((bm[1:-1] > bm[:-2]) & (bm[1:-1] >= bm[2:]) &
+                       (bm[1:-1] >= gate))[0] + 1
+        for i in idx:
+            midi = 69 + 12 * np.log2(bf[i] / 440.0)
+            chroma[int(round(midi)) % 12] += bm[i]
+    total = chroma.sum()
+    if total < 1e-9:
+        return None, None, 0.0
+    chroma /= total
+
+    best = (-2.0, None, None)
+    for shift in range(12):
+        cr = np.roll(chroma, -shift)
+        maj = np.corrcoef(cr, KS_MAJOR)[0, 1]
+        minr = np.corrcoef(cr, KS_MINOR)[0, 1]
+        if np.isfinite(maj) and maj > best[0]:
+            best = (maj, NOTES[shift], "major")
+        if np.isfinite(minr) and minr > best[0]:
+            best = (minr, NOTES[shift], "minor")
+    conf, root, mode = best
+    if conf < 0.55:                             # too diffuse to name honestly
+        return None, None, round(float(max(conf, 0.0)), 2)
+    return root, mode, round(float(conf), 2)
+
+
+# --------------------------------------------------------------------------- #
 #  acoustic half — pure numpy FFT
 # --------------------------------------------------------------------------- #
 def analyze_acoustic(wav_path):
@@ -152,39 +218,33 @@ def analyze_acoustic(wav_path):
     dyn_label = ("very dynamic" if dyn_range > 25 else "dynamic" if dyn_range > 14
                  else "even" if dyn_range > 7 else "flat/compressed")
 
-    # key via chroma + Krumhansl-Schmuckler
-    chroma = np.zeros(12)
-    avg_mag = mag.mean(axis=0)
-    for f, m in zip(freqs, avg_mag):
-        if f < 55 or f > 5000:
-            continue
-        midi = 69 + 12 * np.log2(f / 440.0)
-        pc = int(round(midi)) % 12
-        chroma[pc] += m
-    chroma = chroma / (chroma.sum() + 1e-9)
-    best = (-2, None, None)
-    for shift in range(12):
-        cr = np.roll(chroma, -shift)
-        maj = np.corrcoef(cr, KS_MAJOR)[0, 1]
-        minr = np.corrcoef(cr, KS_MINOR)[0, 1]
-        if maj > best[0]:
-            best = (maj, NOTES[shift], "major")
-        if minr > best[0]:
-            best = (minr, NOTES[shift], "minor")
-    key_conf, key_root, key_mode = best
+    # musical key — dedicated high-res, peak-picked estimator (honest 'unclear'
+    # when the chroma is too diffuse to name, instead of a mushy default win)
+    key_root, key_mode, key_conf = _estimate_key(x, sr)
 
-    # rough tempo via onset-envelope autocorrelation
+    # tempo via onset-envelope autocorrelation. The raw AC decays from lag 0,
+    # so a plain argmax hugs the smallest lag = the FASTEST bpm whenever there
+    # is no real beat (a solo voice) — that was the old ~246-BPM ceiling
+    # artifact. Fix: pick a genuine LOCAL peak that stands clearly above its
+    # surroundings, and return None ('no clear beat') when none does.
     flux = np.maximum(0, np.diff(spec, axis=0)).sum(axis=1)
     tempo_bpm = None
-    if len(flux) > 8:
+    if len(flux) > 16:
         flux = flux - flux.mean()
         ac = np.correlate(flux, flux, mode="full")[len(flux) - 1:]
+        if ac[0] > 0:
+            ac = ac / ac[0]                        # normalize so ac[0] == 1
         fps = sr / hop
-        lo, hi = int(fps * 60 / 240), int(fps * 60 / 50)  # 50-240 BPM
-        if hi < len(ac) and hi > lo:
-            lag = lo + int(np.argmax(ac[lo:hi]))
-            if lag > 0:
-                tempo_bpm = 60.0 * fps / lag
+        lo, hi = int(fps * 60 / 240), int(fps * 60 / 50)   # 50–240 BPM
+        hi = min(hi, len(ac) - 1)
+        if hi > lo + 2:
+            seg = ac[lo:hi]
+            pk = np.where((seg[1:-1] > seg[:-2]) & (seg[1:-1] >= seg[2:]))[0] + 1
+            if pk.size:
+                k = int(pk[np.argmax(seg[pk])])
+                # salience: a real beat's peak rises clearly over the band median
+                if seg[k] > np.median(seg) + 0.10 and seg[k] > 0.10:
+                    tempo_bpm = 60.0 * fps / (lo + k)
 
     # breaths / pauses: contiguous low-RMS regions
     thresh = np.percentile(rms_db, 30)
