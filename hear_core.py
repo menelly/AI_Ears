@@ -231,7 +231,17 @@ def analyze_acoustic(wav_path):
     tempo_bpm = None
     if len(flux) > 16:
         flux = flux - flux.mean()
-        ac = np.correlate(flux, flux, mode="full")[len(flux) - 1:]
+        # FFT-based autocorrelation, O(n log n). Numerically identical to the
+        # direct np.correlate path (verified: rel. diff ~1e-16, same winning
+        # peak) but avoids quadratic scaling that stalls long/dense tracks in
+        # environments with a slow direct correlate (observed in an OpenAI
+        # sandbox on a 274s track; flux length ~24k).
+        # Cross-environment fix: diagnosed & written by Kate (GPT),
+        # verified & benchmarked by Claude, 2026-07-12/13.
+        _n = len(flux)
+        _nfft = 1 << (2 * _n - 1).bit_length()
+        _spec = np.fft.rfft(flux, n=_nfft)
+        ac = np.fft.irfft(_spec * np.conj(_spec), n=_nfft)[:_n]
         if ac[0] > 0:
             ac = ac / ac[0]                        # normalize so ac[0] == 1
         fps = sr / hop
