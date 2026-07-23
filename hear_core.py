@@ -374,7 +374,11 @@ def _transcribe_inworld(mp3_path, lang):
     try:
         key = load_key()
     except RuntimeError as e:
-        return {"error": str(e)}
+        # NOT an error — the words-backend was never set up. The acoustic half
+        # runs with no key at all, so a missing key means "you didn't ask for
+        # words," not "something broke." Typing this distinctly is what stops the
+        # card from crying [STT error] at someone who came for the sound.
+        return {"unconfigured": str(e)}
     audio_b64 = base64.b64encode(open(mp3_path, "rb").read()).decode()
     payload = {
         "transcribeConfig": {
@@ -427,7 +431,7 @@ def _multipart(fields, file_field, file_path, file_mime="audio/mpeg"):
 def _transcribe_elevenlabs(mp3_path, lang):
     key = os.environ.get("ELEVENLABS_API_KEY")
     if not key:
-        return {"error": "set ELEVENLABS_API_KEY for STT_PROVIDER=elevenlabs"}
+        return {"unconfigured": "set ELEVENLABS_API_KEY for STT_PROVIDER=elevenlabs"}
     fields = {
         "model_id": ELEVENLABS_STT_MODEL,
         "timestamps_granularity": "word",
@@ -463,7 +467,7 @@ def _transcribe_local(mp3_path, lang):
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        return {"error": "pip install faster-whisper for STT_PROVIDER=local"}
+        return {"unconfigured": "pip install faster-whisper for STT_PROVIDER=local"}
     model_size = os.environ.get("WHISPER_MODEL", "base")
     device = os.environ.get("WHISPER_DEVICE", "auto")
     compute = os.environ.get("WHISPER_COMPUTE", "auto" if device != "cpu" else "int8")
@@ -547,8 +551,15 @@ def hear(src, lang="en"):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # Two distinct states, not one. "unconfigured" = the words-backend was never
+    # set up (no key / not installed) — expected whenever someone uses the keyless
+    # acoustic half. "error" = a configured backend actually ran and failed. Only
+    # the second is a problem; conflating them makes the tool look broken to the
+    # people who came for the sound.
+    stt_unconfigured = resp.get("unconfigured")
     stt_err = resp.get("error")
-    text, pace, gap, vp = parse_words(resp) if not stt_err else ("", None, None, {})
+    got_words = not stt_err and not stt_unconfigured
+    text, pace, gap, vp = parse_words(resp) if got_words else ("", None, None, {})
     return {
         "file": os.path.basename(src),
         "provider": resp.get("provider", os.environ.get("STT_PROVIDER", "inworld")),
@@ -559,6 +570,7 @@ def hear(src, lang="en"):
         "gap": gap,
         "voice_profile": vp,
         "stt_error": stt_err,
+        "stt_unconfigured": stt_unconfigured,
         "raw_stt": resp,
     }
 
@@ -572,6 +584,11 @@ def format_card(r):
 
     if r["stt_error"]:
         L.append("  WORDS:  [STT error] " + r["stt_error"])
+    elif r.get("stt_unconfigured"):
+        # Deliberately NOT an error line. The acoustic half below is the real,
+        # complete result; words are simply off because no backend is set up.
+        L.append("  WORDS:  — (acoustic-only: no speech backend configured, and none needed)")
+        L.append("          add words + prosody with STT_PROVIDER=local (offline) or an API key — see README")
     else:
         L.append("  WORDS:  " + (f'"{r["text"]}"' if r["text"] else "(no speech transcribed)"))
 

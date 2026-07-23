@@ -47,7 +47,19 @@ No librosa, no scipy, no torch (unless you opt into local Whisper). Just `numpy`
 ```bash
 pip install -r requirements.txt        # mcp, numpy, python-dotenv
 # install ffmpeg and make sure it's on PATH
-cp .env.example .env                   # then fill in your key / pick a provider
+python cli.py your-audio.mp3           # ← works RIGHT NOW. no key, no .env.
+```
+
+That already gives you the full **acoustic + spatial** read — musical key, brightness,
+dynamic range, tempo, breath/pause timing, stereo width. The `WORDS:` line will say
+*acoustic-only: no speech backend configured, and none needed* — that's not an error, it's the
+keyless half doing its job. **If you came here to hear how a piece of music or a voice *sounded*,
+you are already done.** 🎧
+
+**Only add a words backend if you want the transcript + prosody on top:**
+
+```bash
+cp .env.example .env                   # then pick a provider / add a key
 ```
 
 Config is via environment variables (or a `.env` file — see `.env.example`):
