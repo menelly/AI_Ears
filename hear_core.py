@@ -11,7 +11,7 @@ Two halves of hearing, fused into one card:
     Only Inworld emits the voice profile; with the others the VOICE line is
     simply omitted and the acoustic half still carries the "how it sounded".
   • ACOUSTIC SHAPE   — pure-numpy FFT analysis (brightness/centroid, musical
-    key via Krumhansl-Schmuckler, dynamics, tempo, breaths/pauses). Always
+    key via Krumhansl-Schmuckler, dynamics, tempo, quiet intervals/pauses). Always
     local, always on, no key required.
 
 No librosa, no scipy, no torch (unless you opt into local Whisper) — just
@@ -46,6 +46,7 @@ ELEVENLABS_STT_MODEL = "scribe_v1"
 KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+_LOCAL_WHISPER_MODELS = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -243,10 +244,16 @@ def analyze_acoustic(wav_path):
             if pk.size:
                 k = int(pk[np.argmax(seg[pk])])
                 # salience: a real beat's peak rises clearly over the band median
-                if seg[k] > np.median(seg) + 0.10 and seg[k] > 0.10:
+                # Speech and aperiodic transients can produce a barely-positive
+                # local maximum. Require meaningful recurrence, not merely the
+                # best bump in the search band. This deliberately prefers
+                # "no clear beat" over assigning conversational speech ~200 BPM.
+                if seg[k] > np.median(seg) + 0.10 and seg[k] >= 0.15:
                     tempo_bpm = 60.0 * fps / (lo + k)
 
-    # breaths / pauses: contiguous low-RMS regions
+    # Quiet intervals / pauses: contiguous low-RMS regions. Amplitude alone
+    # cannot tell a breath from silence, a held consonant, or room tone, so the
+    # card labels these PAUSES rather than claiming a physiological event.
     thresh = np.percentile(rms_db, 30)
     floor = max(thresh, quiet + 6)
     quiet_mask = rms_db < floor
@@ -400,6 +407,8 @@ def _transcribe_inworld(mp3_path, lang):
         resp = json.load(urllib.request.urlopen(req, timeout=120))
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.read().decode()[:600]}"}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        return {"error": f"Inworld request failed: {e}"}
     tr = resp.get("transcription", resp)
     return {
         "provider": "inworld",
@@ -448,6 +457,8 @@ def _transcribe_elevenlabs(mp3_path, lang):
         data = json.load(urllib.request.urlopen(req, timeout=180))
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.read().decode()[:600]}"}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        return {"error": f"ElevenLabs request failed: {e}"}
     words = [
         {"word": w.get("text", ""),
          "startTimeMs": int(round(w.get("start", 0) * 1000)),
@@ -471,19 +482,28 @@ def _transcribe_local(mp3_path, lang):
     model_size = os.environ.get("WHISPER_MODEL", "base")
     device = os.environ.get("WHISPER_DEVICE", "auto")
     compute = os.environ.get("WHISPER_COMPUTE", "auto" if device != "cpu" else "int8")
+    cache_key = (model_size, device, compute)
     try:
-        model = WhisperModel(model_size, device=device, compute_type=compute)
+        model = _LOCAL_WHISPER_MODELS.get(cache_key)
+        if model is None:
+            model = WhisperModel(model_size, device=device, compute_type=compute)
+            _LOCAL_WHISPER_MODELS[cache_key] = model
     except Exception as e:
         return {"error": f"faster-whisper load failed: {e}"}
-    segments, info = model.transcribe(
-        mp3_path, language=(None if lang in ("auto", None) else lang), word_timestamps=True)
-    words, parts = [], []
-    for seg in segments:
-        parts.append(seg.text)
-        for w in (seg.words or []):
-            words.append({"word": w.word,
-                          "startTimeMs": int(round(w.start * 1000)),
-                          "endTimeMs": int(round(w.end * 1000))})
+    try:
+        segments, info = model.transcribe(
+            mp3_path, language=(None if lang in ("auto", None) else lang), word_timestamps=True)
+        words, parts = [], []
+        # faster-whisper evaluates lazily while iterating the generator, so the
+        # iteration belongs inside the error boundary too.
+        for seg in segments:
+            parts.append(seg.text)
+            for w in (seg.words or []):
+                words.append({"word": w.word,
+                              "startTimeMs": int(round(w.start * 1000)),
+                              "endTimeMs": int(round(w.end * 1000))})
+    except Exception as e:
+        return {"error": f"faster-whisper transcription failed: {e}"}
     return {
         "provider": "local",
         "transcript": "".join(parts).strip(),
@@ -619,7 +639,7 @@ def format_card(r):
                  f" (loud {a['loud_dbfs']} / quiet {a['quiet_dbfs']} dBFS) · crest {a['crest_db']}dB")
         if a["pauses"]:
             ps = ", ".join(f"{t0}–{t1}s ({d}s)" for t0, t1, d in a["pauses"][:4])
-            L.append(f"  BREATH: {ps}")
+            L.append(f"  PAUSES: {ps}")
 
     # SPACE: the stereo field — only when there's a real one. A mono or dual-mono
     # source carries no width to report, so we stay quiet rather than fake it.

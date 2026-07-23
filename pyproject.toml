@@ -10,7 +10,7 @@ keywords = ["mcp", "audio", "speech-to-text", "prosody", "claude", "inworld"]
 dependencies = ["mcp>=1.2.0", "numpy>=1.24"]
 
 [project.scripts]
-ace-ears = "server:mcp"
+ace-ears = "server:main"
 ace-hear = "cli:main"
 
 [build-system]

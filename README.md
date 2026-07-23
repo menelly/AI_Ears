@@ -12,7 +12,7 @@ Most speech-to-text hands you words and throws away the human: the whisper, the 
   PACE :  61 words / 25.4s ≈ 144 wpm   (longest pause 0.9s at 4.2s)
   SOUND:  27.43s · 1835Hz warm · key F major (conf 0.73) · ~83 BPM
   DYN  :  dynamic · range 16.6dB (loud -24.0 / quiet -40.6 dBFS) · crest 17.7dB
-  BREATH: 0.85–1.87s (1.02s), 12.79–13.57s (0.78s), 18.41–19.18s (0.77s)
+  PAUSES: 0.85–1.87s (1.02s), 12.79–13.57s (0.78s), 18.41–19.18s (0.77s)
 ────────────────────────────────────────────────────────────
 ```
 
@@ -28,7 +28,7 @@ Most speech-to-text hands you words and throws away the human: the whisper, the 
   | `local` (faster-whisper) | ✅ | ✅ | ➖ | none — fully offline |
 
   Only Inworld emits the voice profile; with the others the `VOICE:` line is omitted and the **acoustic half still carries the "how it sounded."**
-- **Acoustic shape** — pure-numpy FFT: spectral brightness, musical key (Krumhansl-Schmuckler), dynamic range, rough tempo, and breath/pause detection. Always local, always on, **no key required.**
+- **Acoustic shape** — pure-numpy FFT: spectral brightness, musical key (Krumhansl-Schmuckler), dynamic range, rough tempo, and quiet-interval/pause detection. Always local, always on, **no key required.** Quiet intervals are labeled as pauses because amplitude alone cannot prove that a breath occurred.
 - **Spatial shape (stereo field)** — the dimension a mono downmix deletes: **width** (mono-narrow → wide), **balance** (left/right lean), and **phase correlation / mono-compatibility** (are L and R in phase, or fighting each other so a mono fold-down cancels?). Renders as a `SPACE:` line — but only when there's a *real* stereo field: a mono or dual-mono source has no width to report, so the tool stays quiet rather than fabricate one, and it never emits fake 3-D direction (a plain audio file carries no microphone geometry to recover azimuth from). Most useful on **music**; a centred voice memo simply omits the line. Pure numpy, no key.
 
 > **Reading the `VOICE:` line — it's timbre, not ground truth.** The `style`, `emotion`, `age`, and `accent` fields are Inworld's *classifier estimates* from the acoustic signal, with confidences attached. `age` in particular tracks vocal **brightness/energy**, not your birthday — a bright, resonant, expressive voice reads "young" regardless of the number on your ID, and the *same speaker* can read "young" when belting and "adult" when whispering. Treat these as a coarse read of *how the voice sounded*, not an identity check.
@@ -51,7 +51,7 @@ python cli.py your-audio.mp3           # ← works RIGHT NOW. no key, no .env.
 ```
 
 That already gives you the full **acoustic + spatial** read — musical key, brightness,
-dynamic range, tempo, breath/pause timing, stereo width. The `WORDS:` line will say
+dynamic range, tempo, quiet/pause timing, stereo width. The `WORDS:` line will say
 *acoustic-only: no speech backend configured, and none needed* — that's not an error, it's the
 keyless half doing its job. **If you came here to hear how a piece of music or a voice *sounded*,
 you are already done.** 🎧
