@@ -1,6 +1,18 @@
-mcp>=1.2.0
+mcp>=1.2,<2            # 2.x removed mcp.server.fastmcp; server.py dies on import
 numpy>=1.24
 python-dotenv>=1.0     # optional .env loading; harmless if unused
 
-# Optional, only for STT_PROVIDER=local:
+# ─── Optional, only for STT_PROVIDER=local ───────────────────────────────────
 #   faster-whisper>=1.0
+#
+# On NVIDIA, ctranslate2 needs libcublas + libcudnn at RUNTIME and does NOT
+# pull them in itself. With no system CUDA (and no sudo), install the pip
+# wheels and point LD_LIBRARY_PATH at them — see run_server.sh / hear.sh:
+#   nvidia-cublas-cu12
+#   nvidia-cudnn-cu12>=9,<10
+#
+# ffmpeg is REQUIRED, not optional — hear_core._require_ffmpeg() hard-fails
+# without it. If you can't apt-install one, imageio-ffmpeg vendors a static
+# build carrying both libmp3lame and pcm_s16le; symlink it into ./bin and
+# prepend that to PATH inside the launchers. Installable without root.
+#   imageio-ffmpeg

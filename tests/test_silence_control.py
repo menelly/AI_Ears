@@ -129,6 +129,50 @@ def test_vad_filter_fixes_it(model, maker, label):
     assert heard == "", f"{label}: vad_filter=True still produced {heard!r}"
 
 
+@pytest.mark.parametrize("maker,label", [(_silence, "digital silence"),
+                                         (_near_silence, "near-silence + dither")])
+def test_hear_core_does_not_invent_words(monkeypatch, maker, label):
+    """The regression test: does THIS REPO invent words out of silence?
+
+    The two tests above are library controls -- they call faster-whisper
+    directly, so they answer "does Whisper do this?" and "can vad_filter stop
+    it?" Both true, both worth pinning, and neither of them can change when
+    hear_core changes, because neither of them imports hear_core.
+
+    Which is the bug this whole week has been about, one more time and now in
+    the instrument built to catch it: an honest test answering, with total
+    precision, a question one hop from the one that was asked.
+
+    This one calls the function that actually runs when someone uses the ears.
+    It is red before the vad_filter fix and green after it, and if anyone ever
+    removes the fix it goes red again -- which is the entire job.
+    """
+    pytest.importorskip("faster_whisper",
+                        reason="STT_PROVIDER=local not installed; nothing to control")
+    import hear_core
+
+    monkeypatch.setenv("WHISPER_MODEL", os.environ.get("WHISPER_MODEL", "base"))
+    monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+    monkeypatch.setenv("WHISPER_COMPUTE", "int8")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "control.wav")
+        maker(path)
+        result = hear_core._transcribe_local(path, "en")
+
+    assert "error" not in result, result.get("error")
+    heard = (result.get("transcript") or "").strip()
+    assert heard == "", (
+        f"{label}: hear_core._transcribe_local invented {heard!r} from audio "
+        "containing nothing. The fix is vad_filter=True (env-gated on "
+        "WHISPER_VAD) in _transcribe_local."
+    )
+    assert result.get("wordTimestamps") == [], (
+        f"{label}: transcript was empty but {len(result['wordTimestamps'])} word "
+        "timestamps came back -- silence is being timestamped as speech."
+    )
+
+
 if __name__ == "__main__":
     m = _model()
     print("=" * 68)
