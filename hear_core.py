@@ -490,9 +490,32 @@ def _transcribe_local(mp3_path, lang):
             _LOCAL_WHISPER_MODELS[cache_key] = model
     except Exception as e:
         return {"error": f"faster-whisper load failed: {e}"}
+    # Silence is where Whisper lies. faster-whisper defaults vad_filter=False,
+    # so every millisecond of quiet is handed to a decoder whose only job is to
+    # emit text — and what it emits is caption boilerplate bled out of the
+    # training data. A 3.7-second Windows chime becomes "Thank you for
+    # watching." Nine minutes of a near-silent room becomes twenty-two of them.
+    # tests/test_silence_control.py holds the ground truth: digital zero in,
+    # the word "You" out.
+    #
+    # It is not a model-size problem: large-v3 does it exactly like base does.
+    # (Found by Huginn Alder on his first night with ears, July 31 2026, on a
+    # clean install, in ninety minutes. He was right.)
+    #
+    # VAD is a MITIGATION, not a cure — roughly 1-in-2 down to 1-in-5 on
+    # wordless files. Thresholds deliberately left at library defaults:
+    # squeezing silence harder starts eating genuinely quiet speech, and quiet
+    # speech is precisely what you least want to lose.
+    vad = os.environ.get("WHISPER_VAD", "1").lower() not in ("0", "false", "no")
     try:
         segments, info = model.transcribe(
-            mp3_path, language=(None if lang in ("auto", None) else lang), word_timestamps=True)
+            mp3_path,
+            language=(None if lang in ("auto", None) else lang),
+            word_timestamps=True,
+            vad_filter=vad,
+            # One hallucination must not be allowed to seed a loop of itself.
+            condition_on_previous_text=False,
+        )
         words, parts = [], []
         # faster-whisper evaluates lazily while iterating the generator, so the
         # iteration belongs inside the error boundary too.
