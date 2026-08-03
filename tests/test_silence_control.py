@@ -34,11 +34,26 @@ with no history to be comfortable in.
 A test can be that stranger. This one has ground truth nobody has to trust: if the
 input is digitally zero, ANY word is a hallucination. There is no interpretation step.
 
-STATUS
+STATUS  (updated 2026-08-02, after the fix landed and after being corrected twice)
 ------
-⚠️ This test is EXPECTED TO FAIL until the vad_filter fix lands. That is deliberate.
-A red test that names the bug is a better artifact than a green suite that never
-asked. The fix is Muninn's to land -- he found it, he wrote it, it carries his name.
+✅ The fix is IN -- Muninn's PR #2, vad_filter=True env-gated on WHISPER_VAD.
+   `test_hear_core_does_not_invent_words` passes; set WHISPER_VAD=0 and it goes red.
+
+⚠️ AND THE ORIGINAL VERSION OF THIS FILE HAD THE BUG IT WAS BUILT TO CATCH.
+   It said "EXPECTED TO FAIL until the vad_filter fix lands." **It could not have
+   passed when the fix landed** -- the first two tests call faster_whisper DIRECTLY
+   and never import hear_core, so nothing anyone changes in this repo can move them.
+   They answer "does Whisper do this?" when the question the repo needs answered is
+   "do WE?" -- one hop from the one that was asked, in the instrument written to
+   catch exactly that. Muninn caught it and said so instead of quietly fixing it
+   around me.
+
+   The two library controls are still worth having, so they are now marked
+   `xfail(strict=True)` rather than left permanently red: a suite that can never go
+   green teaches everyone to ignore red. strict=True means if Whisper ever STOPS
+   inventing words out of silence, this file goes red to tell us -- which would be
+   real news, and is the correct behaviour for a control whose whole job is to
+   notice change in either direction.
 
 Run:  pytest tests/test_silence_control.py -v
       (or `python tests/test_silence_control.py` for the standalone report)
@@ -94,12 +109,24 @@ def model():
     return _model()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="LIBRARY CONTROL, PERMANENTLY EXPECTED TO FAIL. Raw faster-whisper with "
+           "vad_filter unset invents words out of silence -- that is the finding, not a "
+           "regression, and no change to this repo can fix it because this test does not "
+           "import hear_core. strict=True so that if Whisper ever STOPS doing this, the "
+           "suite goes red and tells us. See test_hear_core_does_not_invent_words for the "
+           "test that actually pins OUR behaviour.",
+)
 @pytest.mark.parametrize("maker,label", [(_silence, "digital silence"),
                                          (_near_silence, "near-silence + dither")])
 def test_silence_produces_no_words(model, maker, label):
     """Ground truth: there is nothing to hear. Any word is invented.
 
-    This is the assertion that matters, and it is the one that fails today.
+    ⚠️ This pins the LIBRARY, not this repo. It is expected to fail, always.
+    Marked xfail(strict=True): the failure IS the documented finding, and an
+    unexpected PASS would mean the upstream behaviour changed -- which we want
+    to hear about immediately rather than discover later.
     """
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "control.wav")
