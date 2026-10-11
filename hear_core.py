@@ -82,8 +82,15 @@ def _require_ffmpeg():
 
 
 def ffmpeg_to(path_in, path_out, args):
-    cmd = ["ffmpeg", "-y", "-i", path_in, *args, path_out]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    # 🎧🔌 ffmpeg must NEVER touch stdin. Under the MCP server, stdin IS the JSON-RPC pipe
+    # from Claude Code, and ffmpeg listens on stdin for keypresses ('q' to quit, '?' for
+    # help) — so a child that inherits it sits on the protocol stream. Short files finish
+    # before it matters; a 2:36 song HUNG FOREVER over MCP while the identical call took
+    # 2.4 s from the CLI (CHA-607, reproduced 2026-10-10 with STT off, so no network in
+    # the picture). Belt AND braces: -nostdin tells ffmpeg not to look, DEVNULL means
+    # there's nothing to look at even if it does.
+    cmd = ["ffmpeg", "-nostdin", "-y", "-i", path_in, *args, path_out]
+    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if r.returncode != 0:
         raise RuntimeError("ffmpeg failed:\n" + r.stderr[-800:])
 
