@@ -121,12 +121,118 @@ def watch(source, out_dir=None, cols=4, rows=3, listen=True, lang="en"):
 
     card = None
     if listen and mp3:
-        card = hear_core.format_card(hear_core.hear(mp3, lang=lang))
+        heard = hear_core.hear(mp3, lang=lang)
+        card = hear_core.format_card(heard)
+        _save_words(out_dir, heard)  # 🗂️ so look_at() can find a word later WITHOUT re-transcribing
     elif not mp3:
         card = "🔇 No audio track in this clip: eyes only."
 
     return {"title": title, "duration_s": round(dur, 1), "frames": cols * rows,
             "grid": grid, "mp3": mp3, "video": video, "card": card}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  🔎 look_at — the zoom lens (idea: Ren, 2026-11-18 19:10)
+#
+#  The 12-frame grid is a skim. Sometimes the transcript says something that
+#  makes no sense ("the newly MAGNIFIED CBS"), and the on-screen caption has
+#  the real word ("MAGA-fied"), but it happened BETWEEN two of the 12 frames.
+#  look_at() goes and gets the frames at that exact moment.
+#
+#  Deciding a word "makes no sense" is a JUDGMENT, so it stays with the mind
+#  reading the transcript. The tool only does the fetching: hand it a word or
+#  phrase from the transcript (or plain seconds) and it returns the frames.
+# ─────────────────────────────────────────────────────────────────────────────
+
+WORDS_FILE = "words.json"
+CAPTION_OFFSETS = (-0.3, 0.5, 1.3)  # 🎞️ captions run a little ahead of or behind the voice, so 3 shots per moment
+
+
+def _save_words(out_dir, heard):
+    words = (heard.get("raw_stt") or {}).get("wordTimestamps") or []
+    if words:
+        with open(os.path.join(out_dir, WORDS_FILE), "w", encoding="utf-8") as f:
+            json.dump(words, f, ensure_ascii=False)
+
+
+def _norm(w):
+    return "".join(ch for ch in w.lower() if ch.isalnum())
+
+
+def _load_or_transcribe_words(video, lang="en"):
+    # 🗂️ watch() leaves words.json beside the video; if it isn't there, transcribe once and keep it
+    folder = os.path.dirname(os.path.abspath(video))
+    path = os.path.join(folder, WORDS_FILE)
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    mp3 = os.path.join(folder, "reel.mp3")
+    if not os.path.exists(mp3):
+        mp3 = extract_audio(video, mp3)
+    if not mp3:
+        raise RuntimeError("this clip has no audio, so there are no words to search; pass seconds instead")
+    heard = hear_core.hear(mp3, lang=lang)
+    _save_words(folder, heard)
+    words = (heard.get("raw_stt") or {}).get("wordTimestamps") or []
+    if not words:
+        raise RuntimeError("no word timestamps available (is a speech backend configured?); pass seconds instead")
+    return words
+
+
+def find_phrase(words, phrase):
+    """⏱️ Start times (seconds) of every place `phrase` occurs in the word timestamps."""
+    target = [_norm(w) for w in phrase.split() if _norm(w)]
+    toks = [_norm(w.get("word", "")) for w in words]
+    hits = []
+    for i in range(len(toks) - len(target) + 1):
+        if toks[i:i + len(target)] == target:
+            hits.append(words[i].get("startTimeMs", 0) / 1000)
+    return hits
+
+
+def look_at(video, at, out_path=None, lang="en", max_moments=4, frame_width=480):
+    """🔎 Frames at exact moments. `at` = a word/phrase from the transcript, or seconds ("80.5, 112").
+
+    Returns {"image": path, "moments": [seconds...], "note": str}. Each moment
+    becomes one row of 3 frames (just before / at / just after) so a caption
+    that lags the voice still gets caught.
+    """
+    video = os.path.abspath(video)
+    if not os.path.exists(video):
+        raise FileNotFoundError(video)
+    dur = duration_seconds(video)
+
+    tokens = [t.strip() for t in str(at).replace(";", ",").split(",") if t.strip()]
+    try:
+        moments = [float(t) for t in tokens]
+        how = "seconds"
+    except ValueError:
+        moments = find_phrase(_load_or_transcribe_words(video, lang), str(at))
+        how = f'the word(s) "{at}"'
+        if not moments:
+            raise RuntimeError(f'"{at}" is not in the transcript\'s word timestamps (check the spelling the TRANSCRIPT used)')
+
+    note = f"{len(moments)} moment(s) for {how}"
+    if len(moments) > max_moments:
+        note += f"; showing the first {max_moments}"
+        moments = moments[:max_moments]
+
+    folder = tempfile.mkdtemp(prefix="look_")
+    n = 0
+    for t in moments:
+        for off in CAPTION_OFFSETS:
+            ts = min(max(t + off, 0), max(dur - 0.05, 0))
+            # 📸 -ss BEFORE -i = fast seek; one frame, scaled so every tile matches
+            _run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-ss", f"{ts:.3f}", "-i", video,
+                  "-frames:v", "1", "-vf", f"scale={frame_width}:-2",
+                  os.path.join(folder, f"f_{n:03d}.jpg")], "frame grab")
+            n += 1
+
+    out_path = out_path or os.path.join(os.path.dirname(video), f"look_{int(time.time())}.jpg")
+    _run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", os.path.join(folder, "f_%03d.jpg"),
+          "-vf", f"tile={len(CAPTION_OFFSETS)}x{len(moments)}", "-frames:v", "1", out_path], "tiling")
+    shutil.rmtree(folder, ignore_errors=True)
+    return {"image": out_path, "moments": [round(m, 2) for m in moments], "note": note}
 
 
 def main():

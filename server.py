@@ -91,8 +91,37 @@ def watch(source: str, cols: int = 4, rows: int = 3, listen: bool = True, lang: 
     except Exception as e:
         return f"watch() failed: {e}"
     header = (f"👀🎧 WATCHED {r['title'] or os.path.basename(r['video'])} · {r['duration_s']}s · "
-              f"{r['frames']} frames in the grid below\n   files: {r['grid']} · {r['mp3']}")
+              f"{r['frames']} frames in the grid below\n   files: {r['grid']} · {r['mp3']}"
+              f"\n   video: {r['video']}   (🔎 a transcript word that makes no sense? look_at(video, \"that word\"))")
     return [header + ("\n\n" + r["card"] if r["card"] else ""), Image(path=r["grid"])]
+
+
+@mcp.tool()
+def look_at(video: str, at: str, lang: str = "en"):
+    """Zoom in on exact moments of a video: grab the frames where a word was said.
+
+    The watch() grid is a skim of 12 frames. When a transcript word makes no
+    sense in context (speech-to-text heard "the newly magnified CBS" but the
+    on-screen caption says "MAGA-fied"), the caption you need probably fell
+    BETWEEN two grid frames. Hand this tool the odd word or phrase exactly as
+    the TRANSCRIPT spelled it, and it finds every moment it was said and returns
+    3 frames per moment (just before / during / just after, because captions
+    lag or lead the voice). You can also pass seconds instead: "80.5, 112".
+
+    Args:
+        video: Path to the video (watch() prints it on its "video:" line).
+        at: A word or phrase from the transcript, or comma-separated seconds.
+        lang: Transcription language, only used if this clip hasn't been heard yet.
+    """
+    import watch_core
+    try:
+        r = watch_core.look_at(video, at, lang=lang)
+    except FileNotFoundError:
+        return f"No such video file: {video}"
+    except Exception as e:
+        return f"look_at() failed: {e}"
+    return [f"🔎 {r['note']}: at {r['moments']} s. One row per moment (before / during / after).",
+            Image(path=r["image"])]
 
 
 def main():

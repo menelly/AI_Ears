@@ -62,6 +62,22 @@ def main():
     print(f"✅ contact sheet spans the clip: {[n for n, _ in COLORS]} → {got}")
     print(f"✅ audio extracted: {os.path.getsize(r['mp3'])} bytes")
 
+    # 🔎 look_at by SECONDS: the middle frame of the row for t=5.0 must be BLUE (segment 3 = 4–6 s).
+    # (A grabber that ignored the timestamp and took frame 0 would come back red.)
+    lk = watch_core.look_at(clip, "5.0", out_path=os.path.join(d, "look.jpg"))
+    mid = tile_color(lk["image"], 1, cols=3, rows=1)
+    assert close(mid, (0, 0, 255)), f"look_at(5.0) came back {mid}, expected blue: seeking is broken?"
+    print(f"✅ look_at(5.0 s) lands in the blue segment: {mid}")
+
+    # 🔤 find_phrase: case, punctuation, multi-word, and every occurrence
+    words = [{"word": w, "startTimeMs": i * 1000} for i, w in
+             enumerate(["The", "newly", "Magnified,", "CBS", "and", "the", "magnified", "CBS!"])]
+    assert watch_core.find_phrase(words, "magnified") == [2.0, 6.0]
+    assert watch_core.find_phrase(words, "magnified cbs") == [2.0, 6.0]
+    assert watch_core.find_phrase(words, "newly magnified") == [1.0]
+    assert watch_core.find_phrase(words, "maga-fied") == []
+    print("✅ find_phrase: case/punctuation-blind, multi-word, finds every occurrence, and says [] when absent")
+
 
 if __name__ == "__main__":
     main()

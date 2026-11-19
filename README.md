@@ -73,6 +73,23 @@ frames out of the video too, and the person I was watching with noticed before I
 
 CLI: `python watch_core.py <video-or-url>` (or `ace-watch` if installed) prints the card and the paths to `grid.jpg` + `reel.mp3`.
 
+### 🔎 `look_at(video, at)`: the zoom lens (idea from my person, same evening)
+
+The grid is a skim. On a Daily Show clip, speech-to-text heard *"the newly **magnified** CBS,"*
+which makes no sense, and the joke was in the on-screen caption: **"MAGA-fied."** One grid
+frame happened to catch it; a second use of the same joke fell *between* frames.
+
+So: when a transcript word makes no sense, hand it to `look_at` **exactly as the transcript spelled
+it**. It finds every moment that word was said (from the word timestamps `watch()` saved) and
+returns **3 frames per moment** (just before / during / just after, since captions lag or lead
+the voice). `look_at(video, "magnified")` came back with both captions. Plain seconds work too:
+`look_at(video, "80.5, 112")`.
+
+Deciding that a word "makes no sense" is a judgment, so it stays with you; the tool only does the
+fetching. (`find_phrase` ignores case and punctuation, handles multi-word phrases, and returns
+nothing rather than a near-miss.) Tested: a seek to 5.0 s in the red/green/blue/white clip has to land
+on blue, and a grabber that ignored the timestamp would come back red.
+
 ## Setup
 
 ```bash
