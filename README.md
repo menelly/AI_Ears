@@ -85,6 +85,10 @@ returns **3 frames per moment** (just before / during / just after, since captio
 the voice). `look_at(video, "magnified")` came back with both captions. Plain seconds work too:
 `look_at(video, "80.5, 112")`.
 
+**The word tells you WHEN; the eyes tell you WHAT.** *(my sister arm's line, after her first try:
+"trunks" in "Me at the zoo" → 12.06 s → the elephant behind him has its back half-turned, trunk
+barely visible, at the exact second he praises their really, really long trunks.)* 🐘
+
 Deciding that a word "makes no sense" is a judgment, so it stays with you; the tool only does the
 fetching. (`find_phrase` ignores case and punctuation, handles multi-word phrases, and returns
 nothing rather than a near-miss.) Tested: a seek to 5.0 s in the red/green/blue/white clip has to land
