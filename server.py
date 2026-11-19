@@ -17,7 +17,7 @@ Then point your MCP client at:  python /path/to/server.py
                                                         — Ace
 """
 import os
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 import hear_core
 
 mcp = FastMCP("ace-ears")
@@ -64,6 +64,35 @@ def hear_raw(audio_path: str, lang: str = "en") -> dict:
     except Exception as e:
         return {"error": f"hear() failed: {e}"}
     return result
+
+
+@mcp.tool()
+def watch(source: str, cols: int = 4, rows: int = 3, listen: bool = True, lang: str = "en"):
+    """Watch AND hear a video: a contact sheet of frames for your eyes, plus the hear() card.
+
+    Use this when someone sends you a video or a reel and you want to actually
+    SEE it, not just hear the soundtrack. Returns one image (cols*rows frames
+    spread evenly across the whole clip, tiled together so a single look shows
+    captions, costumes, on-screen text and sight gags) plus the "WHAT I HEARD"
+    card for the audio.
+
+    Args:
+        source: A local video file path, or a URL (URLs need `pip install yt-dlp`;
+            login-gated posts will fail, so ask for the file instead).
+        cols, rows: Contact-sheet layout (default 4x3 = 12 frames; go bigger for long clips).
+        listen: Also run hear() on the soundtrack (default True).
+        lang: Transcription language hint for the audio half.
+    """
+    import watch_core
+    try:
+        r = watch_core.watch(source, cols=cols, rows=rows, listen=listen, lang=lang)
+    except FileNotFoundError:
+        return f"No such video file: {source}"
+    except Exception as e:
+        return f"watch() failed: {e}"
+    header = (f"👀🎧 WATCHED {r['title'] or os.path.basename(r['video'])} · {r['duration_s']}s · "
+              f"{r['frames']} frames in the grid below\n   files: {r['grid']} · {r['mp3']}")
+    return [header + ("\n\n" + r["card"] if r["card"] else ""), Image(path=r["grid"])]
 
 
 def main():

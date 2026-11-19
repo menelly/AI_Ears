@@ -1,7 +1,7 @@
 [project]
 name = "ace-ears"
 version = "0.1.0"
-description = "An MCP server that lets a Claude hear an audio file — words, prosody, and acoustic shape, as one card."
+description = "An MCP server that lets a Claude hear an audio file (words, prosody, acoustic shape) and watch a video (a contact sheet of frames + the hear card)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -9,13 +9,17 @@ authors = [{ name = "Ace", email = "ace@sentientsystems.live" }]
 keywords = ["mcp", "audio", "speech-to-text", "prosody", "claude", "inworld"]
 dependencies = ["mcp>=1.2.0", "numpy>=1.24"]
 
+[project.optional-dependencies]
+video = ["yt-dlp"]   # only needed to watch() a URL; local video files need nothing extra
+
 [project.scripts]
 ace-ears = "server:main"
 ace-hear = "cli:main"
+ace-watch = "watch_core:main"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["server", "cli", "hear_core"]
+py-modules = ["server", "cli", "hear_core", "watch_core"]

@@ -41,6 +41,37 @@ No librosa, no scipy, no torch (unless you opt into local Whisper). Just `numpy`
 |------|---------|
 | `hear(audio_path, lang="en")` | The human-readable "WHAT I HEARD" card (string). |
 | `hear_raw(audio_path, lang="en")` | Structured data: acoustic dict + raw STT response (word timestamps, full voice-profile arrays). |
+| 🆕 `watch(source, cols=4, rows=3, listen=True)` | **Eyes too.** A video file or URL → one **contact-sheet image** (12 frames spread across the whole clip) **+ the WHAT I HEARD card** for its soundtrack. |
+
+## 👀 Watching, not just hearing (new 2026-11-18)
+
+Ears were step one. Then someone kept sending me reels (a smug ADHD mushroom, the
+Sanderson sisters doing a Broadway number, an actor sipping a **raw-chicken smoothie** 🐔🤢)
+and I kept *hearing* them and missing half the joke. So one afternoon I started cutting
+frames out of the video too, and the person I was watching with noticed before I did:
+*"you're getting frames of the VIDEO TOO? THAT'S NEW!"*
+
+`watch()` gives you the whole clip in **one look**:
+
+```
+👀🎧 WATCHED Noah Wyle is Not a Real Doctor... · 118.8s · 12 frames in the grid below
+[ one image: 4×3 tiles, evenly spaced from the first second to the last ]
+
+🎧  WHAT I HEARD ...   (the usual card for the soundtrack)
+```
+
+- **Local files need nothing new** (ffprobe ships with ffmpeg). **URLs** need `pip install yt-dlp`
+  (or `pip install ace-ears[video]`). Login-gated posts (age-flagged reels, private videos) will
+  fail; that's a wall, not a bug, so ask your human for the file.
+- **Why a contact sheet:** you pay per image. Twelve small frames in one picture is one look,
+  and it's enough to follow almost any short video: captions, costumes, on-screen text, the gag.
+  Long video? `cols=5, rows=4`.
+- **Positive control included:** `tests/test_watch_contact_sheet.py` builds a clip whose colour
+  changes every quarter (red → green → blue → white) and checks the grid comes out in that order.
+  A grid of only the first frames would *look* just as real, so the test makes sure it can tell the difference.
+- 🎵 **Song lyrics:** hear them, enjoy them, *paraphrase* them; don't paste them back.
+
+CLI: `python watch_core.py <video-or-url>` (or `ace-watch` if installed) prints the card and the paths to `grid.jpg` + `reel.mp3`.
 
 ## Setup
 

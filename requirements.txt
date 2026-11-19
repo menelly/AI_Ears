@@ -2,6 +2,9 @@ mcp>=1.2,<2            # 2.x removed mcp.server.fastmcp; server.py dies on impor
 numpy>=1.24
 python-dotenv>=1.0     # optional .env loading; harmless if unused
 
+# ─── Optional, only for watch(<URL>) ──────────────────────────────────────────
+#   yt-dlp                # local video files need nothing extra; ffprobe ships with ffmpeg
+
 # ─── Optional, only for STT_PROVIDER=local ───────────────────────────────────
 #   faster-whisper>=1.0
 #
